@@ -58,8 +58,10 @@ resource "azurerm_managed_disk" "sql1_data" {
     managed_by  = "snowiac"
   }
 
+  # Existing disks may be zonal; we never want to recreate the disk just
+  # to change zone/size/sku — only IOPS and throughput are mutable here.
   lifecycle {
-    ignore_changes = [create_option, disk_size_gb, storage_account_type]
+    ignore_changes = [create_option, disk_size_gb, storage_account_type, zone]
   }
 }
 
