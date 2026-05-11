@@ -42,3 +42,15 @@ variable "verifier_target_resource_group" {
   type        = string
   default     = "MultiAgentSnow"
 }
+
+variable "postgres_admin_login" {
+  description = "Postgres flexible server admin user (imported value)"
+  type        = string
+  default     = "snowiacadmin"
+}
+
+variable "postgres_admin_password" {
+  description = "Postgres flexible server admin password. Set via tfvars; never committed. After import, this is ignored (see lifecycle.ignore_changes)."
+  type        = string
+  sensitive   = true
+}

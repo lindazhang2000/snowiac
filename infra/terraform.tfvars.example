@@ -18,3 +18,8 @@ snow_user                     = "admin"
 
 # Leave image_tag = "bootstrap" for first apply; the deploy workflow updates it.
 image_tag = "bootstrap"
+
+# Postgres ticket store. Login is fixed by the imported server; password is
+# write-once at create-time and ignored on subsequent applies (managed via Key Vault).
+postgres_admin_login    = "snowiacadmin"
+postgres_admin_password = "REDACTED" # any non-empty string is fine post-import

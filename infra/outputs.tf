@@ -30,3 +30,8 @@ output "webhook_hmac_secret" {
   value       = random_password.hmac.result
   sensitive   = true
 }
+
+output "postgres_fqdn" {
+  description = "FQDN of the Postgres flexible server (ticket store)"
+  value       = azurerm_postgresql_flexible_server.tickets.fqdn
+}
