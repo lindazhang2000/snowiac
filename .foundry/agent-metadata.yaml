@@ -1,0 +1,14 @@
+# Microsoft Foundry agent metadata for the SnowIaC intake agent.
+# Used by the `microsoft-foundry` skill for deploy / observe / trace.
+
+defaultEnvironment: dev
+
+environments:
+  dev:
+    agentName: snowiac-intake-agent
+    projectEndpoint: ${FOUNDRY_PROJECT_ENDPOINT}
+    azureContainerRegistry: ${AZURE_CONTAINER_REGISTRY_ENDPOINT}
+    framework: agent-framework
+    language: python
+    entryPoint: snowiac.agent_entry:main
+    evaluationSuites: []

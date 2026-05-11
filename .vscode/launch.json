@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "SnowIaC: FastAPI server",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["snowiac.server:app", "--reload", "--port", "8000"],
+      "env": { "PYTHONPATH": "${workspaceFolder}/src" },
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "SnowIaC: Foundry agent (agentdev)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "agentdev",
+      "args": ["serve", "snowiac.agent_entry:main"],
+      "env": { "PYTHONPATH": "${workspaceFolder}/src" },
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "SnowIaC: Run intake on sample (azure)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/run_sample.py",
+      "args": ["${workspaceFolder}/Sample_ER_Azure_Cloud_Admin.json"],
+      "env": { "PYTHONPATH": "${workspaceFolder}/src" },
+      "console": "integratedTerminal"
+    }
+  ]
+}

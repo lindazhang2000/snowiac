@@ -9,7 +9,6 @@ on:
   push:
     branches: [main]
     paths:
-      - 'snowflake/**'
       - 'azure/**'
 
 permissions:
@@ -43,11 +42,11 @@ jobs:
           msg=$(git log -1 --pretty=%B)
           ticket=$(echo "$msg" | grep -oE 'RITM[0-9]+' | head -n1 || true)
 
-          # Find the first changed file under azure/ or snowflake/ and use its
+          # Find the first changed file under azure/ and use its
           # immediate ticket subdirectory (e.g. azure/ritm0654928/main.tf -> azure/ritm0654928).
-          changed=$(git diff --name-only HEAD~1 HEAD | grep -E '^(azure|snowflake)/' | head -n1 || true)
+          changed=$(git diff --name-only HEAD~1 HEAD | grep -E '^azure/' | head -n1 || true)
           if [ -z "$changed" ]; then
-            echo "::error::No azure/ or snowflake/ files changed in this commit"; exit 1
+            echo "::error::No azure/ files changed in this commit"; exit 1
           fi
           # Take the top two path components: e.g. azure/ritm0654928
           dir=$(echo "$changed" | awk -F/ '{print $1"/"$2}')

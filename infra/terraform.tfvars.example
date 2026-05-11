@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars and fill in real values (terraform.tfvars is gitignored).
+
+subscription_id = "69f14792-2272-4f1d-96ff-44da16ea5f8a"
+tenant_id       = "ed8832e2-fbd1-443f-8640-12fb0cb6c69d"
+location        = "eastus"
+
+resource_group_name            = "snowiac-app-rg"
+verifier_target_resource_group = "MultiAgentSnow"
+
+github_repo     = "lindazhang2000/snowiac"          # this code repo (for image-deploy OIDC)
+github_iac_repo = "lindazhang2000/snowiac"          # repo SnowIaC opens PRs in (can be the same)
+
+foundry_project_endpoint      = "https://aif-snowiac-dev-zmzvf.services.ai.azure.com/api/projects/snowiac-intake"
+foundry_account_id            = "/subscriptions/69f14792-2272-4f1d-96ff-44da16ea5f8a/resourceGroups/MultiAgentSnow/providers/Microsoft.CognitiveServices/accounts/aif-snowiac-dev-zmzvf"
+foundry_model_deployment_name = "gpt-5.4"
+snow_instance_url             = "https://dev314131.service-now.com"
+snow_user                     = "admin"
+
+# Leave image_tag = "bootstrap" for first apply; the deploy workflow updates it.
+image_tag = "bootstrap"

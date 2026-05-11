@@ -1,0 +1,17 @@
+# App-level deps (agent-framework + agentserver are installed separately, see README)
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+python-dotenv==1.0.1
+httpx==0.27.2
+# Required by agent-framework-azure-ai for LLM calls (transitive dep, pinned explicitly).
+aiohttp>=3.7,<4
+PyGithub==2.4.0
+Jinja2==3.1.4
+azure-identity==1.18.0
+azure-mgmt-compute==33.0.0
+azure-mgmt-resource==23.2.0
+# Optional: only needed when DATABASE_URL is set (Postgres backend).
+psycopg[binary]==3.2.3
+psycopg-pool==3.2.3

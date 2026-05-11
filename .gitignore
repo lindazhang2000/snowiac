@@ -5,7 +5,13 @@ __pycache__/
 .pytest_cache/
 .terraform/
 *.tfstate
-*.tfstate.backup
+*.tfstate.*
+tfplan*
+infra/terraform.tfvars
 .foundry/results/
 .foundry/datasets/
 generated_terraform/
+snowiac.db
+*.db-journal
+build*.log
+payload.json
