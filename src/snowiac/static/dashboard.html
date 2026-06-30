@@ -121,6 +121,42 @@
   }
   .empty-detail { color: var(--muted); padding: 80px 0; text-align: center; }
   a { color: var(--accent); }
+
+  .agents-strip { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; margin: 4px 0 22px; }
+  .agent-node {
+    flex: 1 1 130px; min-width: 130px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px; transition: 0.2s;
+  }
+  .agent-node .an-name { font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .agent-node .an-state { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 6px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .agent-node .an-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .agent-node.is-done   { border-color: rgba(74,222,128,0.5); }
+  .agent-node.is-done .an-dot   { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .agent-node.is-done .an-state { color: var(--green); }
+  .agent-node.is-active { border-color: var(--accent); }
+  .agent-node.is-active .an-dot   { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+  .agent-node.is-active .an-state { color: var(--accent); }
+  .agent-node.is-failed { border-color: rgba(248,113,113,0.6); }
+  .agent-node.is-failed .an-dot   { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  .agent-node.is-failed .an-state { color: var(--red); }
+  .agent-arrow { align-self: center; color: var(--muted); font-size: 14px; }
+  .event .agent-tag {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; white-space: nowrap;
+  }
+  .event details.handoff { margin-top: 8px; }
+  .event details.handoff > summary {
+    cursor: pointer; font-size: 11px; color: var(--accent); font-weight: 600;
+    list-style: none; display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px;
+    background: rgba(106,169,255,0.08); user-select: none; transition: 0.15s;
+  }
+  .event details.handoff > summary::-webkit-details-marker { display: none; }
+  .event details.handoff > summary::before { content: "\25B8"; font-size: 9px; color: var(--muted); }
+  .event details.handoff[open] > summary::before { content: "\25BE"; }
+  .event details.handoff > summary:hover { border-color: var(--accent); }
+  .event details.handoff[open] > summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+  .event details.handoff pre { margin-top: 0; border-top-left-radius: 0; }
 </style>
 </head>
 <body>
@@ -192,6 +228,68 @@ function select(id) {
   loadDetail(id);
 }
 
+// Pipeline stage ordering used to derive per-agent status.
+const STAGE_INDEX = {
+  intake: 1, intake_validated: 2, intake_rejected: 2,
+  codegen: 3, pr_opened: 4,
+  awaiting_human_merge: 5,
+  deploy_applied: 6, deploy_failed: 6,
+  verified: 7, verification_failed: 7,
+  complete: 8, escalated: 8,
+};
+
+// The five pipeline actors, in order, with the stage indices each one owns.
+const AGENTS = [
+  { name: "Intake",       icon: "\uD83D\uDCE5", owned: [1, 2], fail: ["intake_rejected"] },
+  { name: "CodeGen",      icon: "\u2699\uFE0F", owned: [3, 4], fail: [] },
+  { name: "Human Review", icon: "\uD83D\uDC64", owned: [5],    fail: [] },
+  { name: "Verification", icon: "\uD83D\uDD0D", owned: [6, 7], fail: ["deploy_failed", "verification_failed"] },
+  { name: "Closure",      icon: "\u2705",       owned: [8],    fail: ["escalated"] },
+];
+
+// Per-event actor label (deploy is GitHub Actions, not a Foundry agent).
+const EVENT_AGENT = {
+  intake: "Intake", intake_validated: "Intake", intake_rejected: "Intake",
+  codegen: "CodeGen", pr_opened: "CodeGen",
+  awaiting_human_merge: "Human reviewer",
+  deploy_applied: "GitHub Actions", deploy_failed: "GitHub Actions",
+  verified: "Verification", verification_failed: "Verification",
+  complete: "Closure", escalated: "Closure",
+};
+
+// What the event payload represents as it is handed to the next stage.
+const HANDOFF = {
+  intake: "Ticket payload \u2192 IntakeAgent",
+  intake_validated: "IntakeResult \u2192 CodeGenAgent",
+  intake_rejected: "IntakeResult (rejected) \u2192 ServiceNow",
+  codegen: "Extracted params \u2192 CodeGenAgent",
+  pr_opened: "CodeGenResult \u2192 Human reviewer",
+  awaiting_human_merge: "CodeGenResult \u2192 Human reviewer",
+  deploy_applied: "DeploymentReport \u2192 VerificationAgent",
+  deploy_failed: "DeploymentReport \u2192 VerificationAgent",
+  verified: "VerificationResult \u2192 ClosureAgent",
+  verification_failed: "VerificationResult \u2192 ClosureAgent",
+  complete: "ClosureResult \u2192 ServiceNow",
+  escalated: "ClosureResult \u2192 ServiceNow",
+};
+
+function agentStrip(events) {
+  const stages = (events || []).map(e => e.stage).filter(Boolean);
+  const present = new Set(stages);
+  const maxReached = stages.reduce((m, s) => Math.max(m, STAGE_INDEX[s] || 0), 0);
+  const nodes = AGENTS.map(a => {
+    let state = "pending";
+    if (a.fail.some(f => present.has(f))) state = "failed";
+    else if (maxReached > Math.max(...a.owned)) state = "done";
+    else if (maxReached >= Math.min(...a.owned)) state = "active";
+    return `<div class="agent-node is-${state}">
+      <div class="an-name">${a.icon} ${a.name}</div>
+      <div class="an-state"><span class="an-dot"></span> ${state}</div>
+    </div>`;
+  });
+  return `<div class="agents-strip">${nodes.join('<span class="agent-arrow">\u2192</span>')}</div>`;
+}
+
 async function loadDetail(id) {
   try {
     const r = await fetch(`/api/tickets/${id}`);
@@ -220,13 +318,18 @@ function renderDetail(d) {
   `).join("");
 
   const timelineHtml = events.length ? events.map(e => {
-    const payload = e.payload ? `<pre>${escapeHtml(JSON.stringify(e.payload, null, 2))}</pre>` : "";
+    const handoffLabel = HANDOFF[e.stage] || "Handoff payload";
+    const payload = e.payload
+      ? `<details class="handoff"><summary>${escapeHtml(handoffLabel)}</summary><pre>${escapeHtml(JSON.stringify(e.payload, null, 2))}</pre></details>`
+      : "";
     let msg = escapeHtml(e.message);
     // auto-link URLs
     msg = msg.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
+    const actor = EVENT_AGENT[e.stage];
+    const actorTag = actor ? `<span class="agent-tag">${actor}</span>` : "";
     return `
       <div class="event">
-        <div class="row">${badge(e.stage)}<span class="ts">${ago(e.created)}</span></div>
+        <div class="row">${badge(e.stage)}${actorTag}<span class="ts">${ago(e.created)}</span></div>
         <div class="msg">${msg}</div>
         ${payload}
       </div>`;
@@ -239,6 +342,8 @@ function renderDetail(d) {
   document.getElementById("detail").innerHTML = `
     <h2>${escapeHtml(t.RITM)}</h2>
     <div class="desc">${escapeHtml(t.ShortDescription || "")}</div>
+    <div class="section-title">Agents</div>
+    ${agentStrip(events)}
     <div class="grid">${cardHtml}</div>
     <div class="section-title">Agent timeline</div>
     <div class="timeline">${timelineHtml}</div>

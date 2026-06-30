@@ -35,30 +35,38 @@ async def run(report: DeploymentReport, ticket: ServiceNowTicket) -> Verificatio
         log.warning("Could not read verification spec for %s: %s", ticket.RITM, e)
 
     catalog = ticket.Catalog.lower()
+    is_cloud = "azure" in catalog or "cloud" in catalog
 
-    if spec and ("azure" in catalog or "cloud" in catalog) and deterministic_ok:
-        # Spec-driven path: assert each attribute the CodeGen agent declared.
-        evidence = azure_verifier.verify_spec(spec)
-        deterministic_ok = bool(evidence.get("passed"))
-        failed_checks = [c for c in evidence.get("checks", []) if not c.get("passed")]
-        log.info(
-            "Spec-driven verify for %s: passed=%s checks=%s",
-            ticket.RITM,
-            deterministic_ok,
-            evidence.get("checks"),
-        )
-    elif "azure" in catalog or "cloud" in catalog:
-        # Legacy fallback: probe disk by RG/name from the deployment outputs.
-        rg = report.outputs.get("resource_group", "snowiac-rg")
-        disk = report.outputs.get("disk_name", "sql1-data-disk")
-        evidence = azure_verifier.verify_disk(rg, disk)
-        if evidence.get("found") is False:
+    if is_cloud:
+        # Mandatory live verification: for any Azure/cloud change we never trust
+        # the CI-reported status alone. The change is only "verified" if we can
+        # assert the declared spec against live Azure. Anything else fails closed
+        # and escalates for human review.
+        if report.status != "applied":
             deterministic_ok = False
-        desc = ticket.field("Enter a detailed description of the request") or ""
-        if "5000" in desc and evidence.get("iops"):
-            deterministic_ok = deterministic_ok and evidence["iops"] >= 5000
-        if "350" in desc and evidence.get("mbps"):
-            deterministic_ok = deterministic_ok and evidence["mbps"] >= 350
+            evidence = {"reason": f"deployment status={report.status}, expected 'applied'"}
+            log.error("Deploy not applied for %s — failing closed", ticket.RITM)
+        elif spec:
+            evidence = azure_verifier.verify_spec(spec)
+            deterministic_ok = bool(evidence.get("passed"))
+            failed_checks = [c for c in evidence.get("checks", []) if not c.get("passed")]
+            log.info(
+                "Spec-driven verify for %s: passed=%s checks=%s",
+                ticket.RITM,
+                deterministic_ok,
+                evidence.get("checks"),
+            )
+        else:
+            # No persisted spec → we cannot prove the live state matches intent.
+            # Refuse to auto-close; escalate instead of trusting the pipeline.
+            deterministic_ok = False
+            evidence = {
+                "reason": "no verification spec persisted; cannot confirm live Azure state",
+            }
+            log.error(
+                "No verification spec for cloud ticket %s — failing closed",
+                ticket.RITM,
+            )
 
     summary = (
         f"Deployment {report.status}. Observed: {evidence}."

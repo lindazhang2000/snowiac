@@ -36,6 +36,10 @@ class TicketStore(Protocol):
     ) -> None: ...
     def get_events(self, ticket_id: str) -> list[dict[str, Any]]: ...
     def list_tickets(self) -> list[dict[str, Any]]: ...
+    def set_state(self, ticket_id: str, stage: str, status: str) -> None: ...
+    def get_state(self, ticket_id: str) -> dict[str, Any] | None: ...
+    def mark_run_processed(self, run_id: str, ticket_id: str | None = None) -> bool: ...
+    def unmark_run_processed(self, run_id: str) -> None: ...
 
 
 def _summarise(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -81,6 +85,18 @@ class SQLiteTicketStore:
         created    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS events_ticket_idx ON events(ticket_id, id);
+    CREATE TABLE IF NOT EXISTS workflow_state (
+        ticket_id TEXT PRIMARY KEY,
+        stage     TEXT NOT NULL,
+        status    TEXT NOT NULL,
+        attempts  INTEGER NOT NULL DEFAULT 0,
+        updated   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS processed_runs (
+        run_id    TEXT PRIMARY KEY,
+        ticket_id TEXT,
+        created   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
     """
 
     def __init__(self, db_path: str) -> None:
@@ -175,6 +191,45 @@ class SQLiteTicketStore:
             ).fetchall()
         return _summarise([dict(r) for r in rows])
 
+    def set_state(self, ticket_id: str, stage: str, status: str) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO workflow_state(ticket_id, stage, status, attempts) "
+                "VALUES(?,?,?,1) ON CONFLICT(ticket_id) DO UPDATE SET "
+                "stage=excluded.stage, status=excluded.status, "
+                "attempts=workflow_state.attempts+1, updated=CURRENT_TIMESTAMP",
+                (ticket_id, stage, status),
+            )
+
+    def get_state(self, ticket_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT stage, status, attempts, updated FROM workflow_state "
+                "WHERE ticket_id = ?",
+                (ticket_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def mark_run_processed(self, run_id: str, ticket_id: str | None = None) -> bool:
+        """Returns True if this run_id is new (caller should process it),
+        False if it was already seen (caller should skip — idempotent)."""
+        if not run_id:
+            return True  # nothing to dedupe on; treat as new
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO processed_runs(run_id, ticket_id) VALUES(?,?)",
+                (run_id, ticket_id),
+            )
+            return cur.rowcount == 1
+
+    def unmark_run_processed(self, run_id: str) -> None:
+        """Release a run_id so a retried delivery can be processed again — used
+        when the post-deploy flow failed after marking the run."""
+        if not run_id:
+            return
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM processed_runs WHERE run_id = ?", (run_id,))
+
 
 # ─── PostgreSQL ───────────────────────────────────────────────────────────────
 class PostgresTicketStore:
@@ -206,6 +261,22 @@ class PostgresTicketStore:
         )
         """,
         "CREATE INDEX IF NOT EXISTS events_ticket_idx ON events(ticket_id, id)",
+        """
+        CREATE TABLE IF NOT EXISTS workflow_state (
+            ticket_id TEXT PRIMARY KEY,
+            stage     TEXT NOT NULL,
+            status    TEXT NOT NULL,
+            attempts  INTEGER NOT NULL DEFAULT 0,
+            updated   TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS processed_runs (
+            run_id    TEXT PRIMARY KEY,
+            ticket_id TEXT,
+            created   TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
     ]
 
     def __init__(self, database_url: str) -> None:
@@ -310,6 +381,52 @@ class PostgresTicketStore:
                 if r.get(k) is not None:
                     r[k] = r[k].isoformat()
         return _summarise(rows)
+
+    def set_state(self, ticket_id: str, stage: str, status: str) -> None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO workflow_state(ticket_id, stage, status, attempts) "
+                "VALUES(%s,%s,%s,1) ON CONFLICT(ticket_id) DO UPDATE SET "
+                "stage=EXCLUDED.stage, status=EXCLUDED.status, "
+                "attempts=workflow_state.attempts+1, updated=NOW()",
+                (ticket_id, stage, status),
+            )
+
+    def get_state(self, ticket_id: str) -> dict[str, Any] | None:
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT stage, status, attempts, updated FROM workflow_state "
+                "WHERE ticket_id = %s",
+                (ticket_id,),
+            )
+            rows = self._rows(cur)
+        if not rows:
+            return None
+        r = rows[0]
+        if r.get("updated") is not None:
+            r["updated"] = r["updated"].isoformat()
+        return r
+
+    def mark_run_processed(self, run_id: str, ticket_id: str | None = None) -> bool:
+        """Returns True if this run_id is new (caller should process it),
+        False if it was already seen (caller should skip — idempotent)."""
+        if not run_id:
+            return True
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO processed_runs(run_id, ticket_id) VALUES(%s,%s) "
+                "ON CONFLICT(run_id) DO NOTHING",
+                (run_id, ticket_id),
+            )
+            return cur.rowcount == 1
+
+    def unmark_run_processed(self, run_id: str) -> None:
+        """Release a run_id so a retried delivery can be processed again — used
+        when the post-deploy flow failed after marking the run."""
+        if not run_id:
+            return
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM processed_runs WHERE run_id = %s", (run_id,))
 
 
 # ─── Factory ──────────────────────────────────────────────────────────────────

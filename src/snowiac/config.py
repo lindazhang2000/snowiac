@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # Webhook
     webhook_hmac_secret: str = "change-me"
 
+    # Email notifications (closure sink for email-sourced requests)
+    notify_email_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "snowiac@example.com"
+    smtp_use_tls: bool = True
+
     # Persistence
     snowiac_db_path: str = "snowiac.db"
     # If set (e.g. postgresql://user:pass@host:5432/snowiac?sslmode=require)

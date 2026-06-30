@@ -236,7 +236,7 @@ flowchart TB
     T -->|"1 · POST envelope"| API
     IA -.->|"classify"| LLM
     CG -.->|"extract params"| LLM
-    CA -.->|"summarize"| LLM
+    VA -.->|"summarize"| LLM
     CG -->|"2 · render TF + open PR"| PR
     PR --> HUMAN
     HUMAN -->|"3 · merge"| REPO
@@ -319,16 +319,16 @@ sequenceDiagram
 | Layer | Module | Responsibility |
 |---|---|---|
 | **Edge** | `server.py` | HTTP surface — ticket intake, GitHub webhook (HMAC-verified), dashboard, JSON API. |
-| **Orchestration** | `workflow.py` | Two flows (`run_intake_flow`, `run_post_deploy_flow`); `TicketStore` (Postgres in cloud, SQLite locally) with events for the timeline. |
+| **Orchestration** | `workflow.py` | Two flows (`run_intake_flow`, `run_post_deploy_flow`) wired to the `TicketStore` from `store.py` (Postgres in cloud, SQLite locally) with events for the timeline. |
 | **Agents** | `agents/intake.py` | Foundry LLM call to classify the ticket, validate required payload fields. |
 |  | `agents/code_generation.py` | LLM-extract structured `AzureDiskParams`, render Jinja2 Terraform, open/update PR via PyGithub, persist spec. |
 |  | `agents/verification.py` | Spec-driven assertion runner that reads the live Azure resource. |
-|  | `agents/closure.py` | LLM-formulate evidence comment, PATCH ServiceNow ticket. |
+|  | `agents/closure.py` | Compose evidence comment, PATCH ServiceNow ticket (deterministic, no LLM). |
 | **Services** | `services/azure_verifier.py` | `azure-mgmt-compute` wrapper + `verify_spec` op evaluator (`>=`, `<=`, `==`, `!=`, `>`, `<`). |
 |  | `services/parameter_extractor.py` | LLM-structured extraction with regex fallback. |
 |  | `services/terraform_generator.py` | StrictUndefined Jinja2 renderer for templates and tfvars. |
 |  | `services/github_repo.py` | PyGithub branch/file/PR upserts (idempotent reuse). |
-|  | `services/snow_client.py` | ServiceNow REST client (lookup, PATCH, comment). |
+|  | `services/servicenow.py` | ServiceNow REST client (lookup, PATCH, comment) + in-memory mock. |
 | **Persistence** | PostgreSQL (Azure Database for PostgreSQL Flexible Server) | `tickets`, `specs`, `events` tables. Connection string sourced from Key Vault. Falls back to local SQLite (`snowiac.db`) when `DATABASE_URL` is unset. |
 | **CI/CD** | `.github/workflows/terraform-apply.yml` | OIDC login, AAD-auth backend, plan/apply, HMAC callback. |
 
@@ -370,14 +370,17 @@ src/snowiac/
     azure_verifier.py    # azure-mgmt-compute calls + assertion engine
     github_repo.py       # PyGithub wrapper
     parameter_extractor.py
-    snow_client.py
+    servicenow.py        # ServiceNow REST client + mock
     terraform_generator.py
   static/
     dashboard.html       # live UI
+  agent_entry.py         # Foundry hosted-agent entry point (intake-only)
   config.py              # pydantic-settings (.env)
+  llm.py                 # shared FoundryChatClient factory
   models.py              # Pydantic models
   server.py              # FastAPI: /tickets/intake, /webhooks/github, /api/tickets, /
-  workflow.py            # Postgres/SQLite TicketStore + flow orchestration
+  store.py               # Postgres/SQLite TicketStore
+  workflow.py            # flow orchestration (intake + post-deploy)
 terraform_templates/
   azure_disk_change.tf.j2
   *_backend.tf.j2
@@ -503,9 +506,9 @@ See `.env.template`. Key settings:
 | Var | Default | Notes |
 |---|---|---|
 | `FOUNDRY_PROJECT_ENDPOINT` | — | Microsoft Foundry project URL |
-| `FOUNDRY_MODEL_DEPLOYMENT_NAME` | `gpt-5.4` | Foundry deployment name |
+| `FOUNDRY_MODEL_DEPLOYMENT_NAME` | `gpt-4.1-mini` | Foundry deployment name (`.env.template` ships `gpt-5.4`) |
 | `SNOW_INSTANCE_URL` / `SNOW_USER` / `SNOW_PASSWORD` | — | ServiceNow REST creds |
-| `SNOWIAC_USE_MOCKS` | `false` | Set `true` to bypass external systems |
+| `SNOWIAC_USE_MOCKS` | `true` | Code default mocks external systems; `.env.template` sets `false`. Set `true` to bypass external systems |
 | `GITHUB_TOKEN` / `GITHUB_REPO` / `GITHUB_BASE_BRANCH` | — | PyGithub config |
 | `AZURE_SUBSCRIPTION_ID` | — | For VerificationAgent |
 | `WEBHOOK_HMAC_SECRET` | `change-me` | Must match `SNOWIAC_WEBHOOK_SECRET` in GH |

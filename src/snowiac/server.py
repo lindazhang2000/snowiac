@@ -18,7 +18,7 @@ log = logging.getLogger("snowiac.server")
 
 app = FastAPI(title="SnowIaC", version="0.1.0")
 
-_DASHBOARD_HTML = (Path(__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
+_DASHBOARD_PATH = Path(__file__).parent / "static" / "dashboard.html"
 
 
 @app.get("/health")
@@ -28,7 +28,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard() -> str:
-    return _DASHBOARD_HTML
+    return _DASHBOARD_PATH.read_text(encoding="utf-8")
 
 
 @app.get("/api/tickets")
