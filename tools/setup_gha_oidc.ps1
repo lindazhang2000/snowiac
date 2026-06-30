@@ -1,6 +1,6 @@
 param(
   [string]$AppName = "snowiac-gha-tf",
-  [string]$Repo = "lindazhang2000/snowiac",
+  [string]$Repo = "lindazhang2000/iac-ai-agents",
   [string]$Subscription = "00000000-0000-0000-0000-000000000000",  # set to your Azure subscription ID
   [string]$ResourceGroup = "snowiac-app-rg",
   [string]$StorageAccount = "snowiacstateehlgt"

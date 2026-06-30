@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-$repo = "lindazhang2000/snowiac"
+$repo = "lindazhang2000/iac-ai-agents"
 $webhookUrl = "https://snowiac-app.wittyflower-d82ff27c.eastus.azurecontainerapps.io/webhooks/github"
 $hmac = $env:SNOWIAC_WEBHOOK_SECRET  # export before running; do NOT hardcode
 
