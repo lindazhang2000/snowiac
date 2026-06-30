@@ -16,12 +16,12 @@ name: terraform-plan-policy
 # it cannot be bypassed.
 
 on:
+  # Runs on EVERY pull request to main (no path filter) so the required
+  # `policy-gate` status check is always reported. The job short-circuits and
+  # passes immediately when the PR changes no azure/** Terraform, so non-infra
+  # PRs are not blocked waiting for a check that never runs.
   pull_request:
     branches: [main]
-    paths:
-      - 'azure/**'
-      - 'policy/**'
-      - '.github/workflows/terraform-plan.yml'
 
 permissions:
   contents: read
