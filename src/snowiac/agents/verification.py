@@ -101,13 +101,24 @@ async def run(report: DeploymentReport, ticket: ServiceNowTicket) -> Verificatio
             f"  - {c['attribute']} expected {c['op']} {c['expected']}, observed {c['actual']}"
             for c in failed_checks
         )
-        await snow.add_comment(
-            ticket.RITM,
-            f"[SnowIaC Verification] Issue detected after deployment: {summary}\n"
-            + (f"Failing checks:\n{check_lines}\n" if check_lines else "")
-            + f"Cloud admin (manager: {ticket.Manager}) please review.",
-        )
-        await snow.update_state(ticket.RITM, state="Work in Progress", stage="Admin Review")
+        try:
+            await snow.add_comment(
+                ticket.RITM,
+                f"[SnowIaC Verification] Issue detected after deployment: {summary}\n"
+                + (f"Failing checks:\n{check_lines}\n" if check_lines else "")
+                + f"Cloud admin (manager: {ticket.Manager}) please review.",
+            )
+            await snow.update_state(ticket.RITM, state="Work in Progress", stage="Admin Review")
+        except Exception as e:  # noqa: BLE001
+            # ServiceNow being unreachable must not crash the post-deploy flow.
+            # The verdict (fail-closed) still stands; ClosureAgent emails the
+            # requester and the failure is recorded in durable state. Flag for a
+            # manual SNOW sync instead of bubbling a 500 back to GitHub Actions.
+            log.error(
+                "ServiceNow escalation failed for %s: %s — continuing (manual SNOW sync needed)",
+                ticket.RITM,
+                e,
+            )
 
     return VerificationResult(
         ticket_id=ticket.RITM, success=success, summary=summary, evidence=evidence
