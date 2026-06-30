@@ -25,11 +25,11 @@ provider "azurerm" {
   features {}
 }
 
-variable "subscription_id"      { type = string }
-variable "resource_group_name"  { type = string }
-variable "disk_name"            { type = string }
-variable "location"             { type = string }
-variable "disk_size_gb"         { type = number }
+variable "subscription_id" { type = string }
+variable "resource_group_name" { type = string }
+variable "disk_name" { type = string }
+variable "location" { type = string }
+variable "disk_size_gb" { type = number }
 variable "storage_account_type" {
   type    = string
   default = "PremiumV2_LRS"
@@ -46,7 +46,7 @@ resource "azurerm_managed_disk" "sql1_data" {
   resource_group_name  = var.resource_group_name
   location             = var.location
   storage_account_type = var.storage_account_type
-  create_option        = "Empty"   # required field; ignored on import
+  create_option        = "Empty" # required field; ignored on import
   disk_size_gb         = var.disk_size_gb
 
   # The actual change requested by ticket RITM0654928:

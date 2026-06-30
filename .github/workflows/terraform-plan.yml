@@ -1,0 +1,135 @@
+name: terraform-plan-policy
+
+# Policy-as-code gate. Runs on every pull request that touches azure/**.
+# Produces a Terraform plan and runs it through two policy engines:
+#   * Checkov   — broad, off-the-shelf IaC security/compliance rules.
+#   * Conftest  — SnowIaC-specific guardrails (policy/snowiac.rego).
+# A failure here blocks the merge, so the human-merge step is also a
+# policy-enforcement boundary, not just a code review.
+#
+# Make this a *required* status check on the `main` branch protection rule so
+# it cannot be bypassed.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'azure/**'
+      - 'policy/**'
+      - '.github/workflows/terraform-plan.yml'
+
+permissions:
+  id-token: write      # OIDC for azure/login (plan needs to read provider state)
+  contents: read
+  pull-requests: write # to post the plan summary as a PR comment
+
+env:
+  TFSTATE_RG: ${{ vars.TFSTATE_RESOURCE_GROUP }}
+  TFSTATE_SA: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+  TFSTATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+
+jobs:
+  plan-and-policy:
+    runs-on: ubuntu-latest
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed ticket directory
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          changed=$(git diff --name-only "$base" "$head" | grep -E '^azure/' | head -n1 || true)
+          if [ -z "$changed" ]; then
+            echo "::notice::No azure/ files changed; skipping plan."
+            echo "dir=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          dir=$(echo "$changed" | awk -F/ '{print $1"/"$2}')
+          ticket=$(basename "$dir" | tr '[:lower:]' '[:upper:]')
+          echo "dir=$dir"       >> "$GITHUB_OUTPUT"
+          echo "ticket=$ticket" >> "$GITHUB_OUTPUT"
+          echo "Dir: $dir  Ticket: $ticket"
+
+      - uses: azure/login@v2
+        if: steps.meta.outputs.dir != ''
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.meta.outputs.dir != ''
+        with:
+          terraform_version: 1.9.5
+
+      - name: Terraform fmt check
+        if: steps.meta.outputs.dir != ''
+        working-directory: ${{ steps.meta.outputs.dir }}
+        run: terraform fmt -check -diff
+
+      - name: Terraform init
+        if: steps.meta.outputs.dir != ''
+        working-directory: ${{ steps.meta.outputs.dir }}
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${TFSTATE_RG}" \
+            -backend-config="storage_account_name=${TFSTATE_SA}" \
+            -backend-config="container_name=${TFSTATE_CONTAINER}" \
+            -backend-config="key=${{ steps.meta.outputs.ticket }}.tfstate" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: Terraform validate
+        if: steps.meta.outputs.dir != ''
+        working-directory: ${{ steps.meta.outputs.dir }}
+        run: terraform validate
+
+      - name: Terraform plan
+        if: steps.meta.outputs.dir != ''
+        working-directory: ${{ steps.meta.outputs.dir }}
+        run: |
+          terraform plan -input=false -lock=false -out=tfplan
+          terraform show -json tfplan > plan.json
+
+      - name: Checkov (broad IaC policy)
+        if: steps.meta.outputs.dir != ''
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: ${{ steps.meta.outputs.dir }}
+          framework: terraform
+          soft_fail: false
+          output_format: cli
+
+      - name: Conftest (SnowIaC guardrails)
+        if: steps.meta.outputs.dir != ''
+        uses: instrumenta/conftest-action@master
+        with:
+          files: ${{ steps.meta.outputs.dir }}/plan.json
+          policy: policy
+
+      - name: Post plan summary
+        if: always() && steps.meta.outputs.dir != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const dir = '${{ steps.meta.outputs.dir }}';
+            let body = `### Terraform policy gate for \`${dir}\`\n\n`;
+            body += `Status: **${{ job.status }}**\n\n`;
+            body += `Checkov + Conftest (\`policy/snowiac.rego\`) ran against the plan. `;
+            body += `A failing check blocks this merge.`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
