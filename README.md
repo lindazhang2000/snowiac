@@ -1,4 +1,4 @@
-# SnowIaC
+# IaC AI Agents
 
 > A multi-agent system that takes a ServiceNow request, generates Terraform, opens a pull request, lets a human approve, deploys to Azure via GitHub Actions OIDC, verifies the live infrastructure against a spec, and auto-closes the ticket.
 
@@ -75,7 +75,7 @@ Five Foundry agents collaborate:
 ./tools/submit_and_ingest.ps1 -Item Azure
 ```
 
-This creates a live RITM (e.g. `RITM0010009`) in your ServiceNow dev instance, pulls it back, reshapes it into the SnowIaC payload, and POSTs it to the deployed Container App's `/tickets/intake`. Expected output ends with the RITM number and `200 OK`.
+This creates a live RITM (e.g. `RITM0010009`) in your ServiceNow dev instance, pulls it back, reshapes it into the intake payload, and POSTs it to the deployed Container App's `/tickets/intake`. Expected output ends with the RITM number and `200 OK`.
 
 #### Step 2 — Watch the dashboard
 
@@ -192,8 +192,8 @@ flowchart TB
         T[("sc_req_item ticket")]:::snow
     end
 
-    %% ─── SnowIaC app ─────────────────────────────────────────
-    subgraph SnowIaC["🔵 SnowIaC (Azure Container App)"]
+    %% ─── IaC AI Agents app ─────────────────────────────────────────
+    subgraph APP["🔵 IaC AI Agents (Azure Container App)"]
         direction TB
         API["FastAPI<br/>• /tickets/intake<br/>• /webhooks/github<br/>• /api/tickets · /"]:::app
         WF["workflow.py orchestrator"]:::app
@@ -250,7 +250,7 @@ flowchart TB
     CA -->|"7 · PATCH + comment"| T
 
     %% ─── Identity / secrets (dotted = trust) ─────────────────
-    SnowIaC -. "UAMI auth" .-> UAMI
+    APP -. "UAMI auth" .-> UAMI
     UAMI -. "Key Vault Secrets User" .-> KV
     UAMI -. "Azure AI User" .-> LLM
     UAMI -. "Reader" .-> RES
@@ -268,7 +268,7 @@ The flow is split into two phases — **intake → PR** (before the human merges
 sequenceDiagram
     autonumber
     participant SNOW as ServiceNow
-    participant API as SnowIaC API
+    participant API as IaC AI Agents API
     participant AG as Agents<br/>(Intake + CodeGen)
     participant LLM as Foundry<br/>gpt-5.4
     participant DB as Postgres
@@ -296,7 +296,7 @@ sequenceDiagram
     participant H as Human<br/>reviewer
     participant GH as GitHub<br/>(repo + Actions)
     participant AZ as Azure<br/>(OIDC + target)
-    participant API as SnowIaC API
+    participant API as IaC AI Agents API
     participant AG as Agents<br/>(Verify + Close)
     participant SNOW as ServiceNow
 
@@ -603,7 +603,7 @@ Or trigger manually from the Actions tab.
 
 ### Wire up the IaC repo
 
-In the repo SnowIaC opens PRs in (e.g. `lindazhang2000/iac-ai-agents`), set:
+In the repo IaC AI Agents opens PRs in (e.g. `lindazhang2000/iac-ai-agents`), set:
 
 | Secret | Value |
 |---|---|
