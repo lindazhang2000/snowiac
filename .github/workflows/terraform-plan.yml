@@ -73,9 +73,14 @@ jobs:
 
       - name: Setup Conftest
         if: steps.meta.outputs.dir != ''
-        uses: open-policy-agent/setup-conftest@v0
-        with:
-          conftest_version: 0.56.0
+        run: |
+          CONFTEST_VERSION=0.56.0
+          curl -sSfL \
+            "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
+            -o /tmp/conftest.tar.gz
+          tar -xzf /tmp/conftest.tar.gz -C /tmp conftest
+          sudo install /tmp/conftest /usr/local/bin/conftest
+          conftest --version
 
       - name: Conftest (SnowIaC guardrails — blocking)
         if: steps.meta.outputs.dir != ''
