@@ -63,7 +63,7 @@ Five Foundry agents collaborate:
 > - [ ] Container App revision is running with the current image `snowiacacrehlgt.azurecr.io/snowiac:v4` and `FOUNDRY_MODEL_DEPLOYMENT_NAME = gpt-5.4`
 > - [ ] Key Vault holds **all four** secrets: `database-url`, `webhook-hmac-secret`, `snow-password`, `github-token`
 > - [ ] Postgres Flexible Server is reachable and the `snowiac` database exists
-> - [ ] In the IaC repo (e.g. `lindazhang2000/snowiac`) the GHA secrets are set: `SNOWIAC_WEBHOOK_URL`, `SNOWIAC_WEBHOOK_SECRET`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
+> - [ ] In the IaC repo (e.g. `lindazhang2000/iac-ai-agents`) the GHA secrets are set: `SNOWIAC_WEBHOOK_URL`, `SNOWIAC_WEBHOOK_SECRET`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
 > - [ ] The federated SP has **Contributor** on the target RG (where the disk lives) and **Storage Blob Data Contributor** on the tfstate account
 > - [ ] Local `.env` has `SNOW_INSTANCE_URL`, `SNOW_USER`, `SNOW_PASSWORD`, `GITHUB_TOKEN`, `GITHUB_REPO`
 > - [ ] `az login` complete and `gh auth status` shows authenticated
@@ -603,7 +603,7 @@ Or trigger manually from the Actions tab.
 
 ### Wire up the IaC repo
 
-In the repo SnowIaC opens PRs in (e.g. `lindazhang2000/snowiac`), set:
+In the repo SnowIaC opens PRs in (e.g. `lindazhang2000/iac-ai-agents`), set:
 
 | Secret | Value |
 |---|---|

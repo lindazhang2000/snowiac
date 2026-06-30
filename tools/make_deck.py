@@ -559,7 +559,7 @@ textbox(s, Inches(0.8), Inches(3.3), SW - Inches(1.6), Inches(0.7),
         "Real ServiceNow • Real Azure • Real GitHub PR",
         font_size=22, color=GOLD)
 textbox(s, Inches(0.8), Inches(4.0), SW - Inches(1.6), Inches(0.6),
-        "github.com/lindazhang2000/snowiac",
+        "github.com/lindazhang2000/iac-ai-agents",
         font_size=16, color=RGBColor(0xCF, 0xDA, 0xE8))
 
 notes(s, """
@@ -567,7 +567,7 @@ That's the pitch. Time to switch to the terminal and the browser and run it for 
 
 I'll have three windows open: the SnowIaC dashboard showing ticket state, the GitHub PR tab, and ServiceNow showing the RITM. Watch all three update as the agents work.
 
-The code is open at github.com/lindazhang2000/snowiac — Terraform, agent code, GitHub Actions workflow, demo scripts, everything.
+The code is open at github.com/lindazhang2000/iac-ai-agents — Terraform, agent code, GitHub Actions workflow, demo scripts, everything.
 
 Let's go.
 """)

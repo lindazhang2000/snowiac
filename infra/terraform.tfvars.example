@@ -7,8 +7,8 @@ location        = "eastus"
 resource_group_name            = "snowiac-app-rg"
 verifier_target_resource_group = "MultiAgentSnow"
 
-github_repo     = "lindazhang2000/snowiac"          # this code repo (for image-deploy OIDC)
-github_iac_repo = "lindazhang2000/snowiac"          # repo SnowIaC opens PRs in (can be the same)
+github_repo     = "lindazhang2000/iac-ai-agents"          # this code repo (for image-deploy OIDC)
+github_iac_repo = "lindazhang2000/iac-ai-agents"          # repo SnowIaC opens PRs in (can be the same)
 
 foundry_project_endpoint      = "https://aif-snowiac-dev-zmzvf.services.ai.azure.com/api/projects/snowiac-intake"
 foundry_account_id            = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/MultiAgentSnow/providers/Microsoft.CognitiveServices/accounts/aif-snowiac-dev-zmzvf"
