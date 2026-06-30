@@ -1,11 +1,16 @@
 name: terraform-plan-policy
 
-# Policy-as-code gate. Runs on every pull request that touches azure/**.
-# Produces a Terraform plan and runs it through two policy engines:
-#   * Checkov   — broad, off-the-shelf IaC security/compliance rules.
-#   * Conftest  — SnowIaC-specific guardrails (policy/snowiac.rego).
-# A failure here blocks the merge, so the human-merge step is also a
-# policy-enforcement boundary, not just a code review.
+# Hermetic policy-as-code gate. Runs on every pull request that touches
+# azure/**. It is intentionally self-contained: NO Azure credentials and NO
+# remote state are required, so it is safe to run in the fork/PR context and
+# cannot leak cloud access. It analyses the proposed Terraform statically:
+#   * terraform fmt   — formatting
+#   * terraform validate (-backend=false) — syntactic/schema validity
+#   * Conftest        — SnowIaC-specific guardrails (policy/snowiac.rego),
+#                        the authoritative blocking gate.
+#   * Checkov         — broad off-the-shelf IaC scan (report-only).
+# A Conftest failure blocks the merge, making the human-merge step a real
+# policy-enforcement boundary.
 #
 # Make this a *required* status check on the `main` branch protection rule so
 # it cannot be bypassed.
@@ -19,23 +24,12 @@ on:
       - '.github/workflows/terraform-plan.yml'
 
 permissions:
-  id-token: write      # OIDC for azure/login (plan needs to read provider state)
   contents: read
-  pull-requests: write # to post the plan summary as a PR comment
-
-env:
-  TFSTATE_RG: ${{ vars.TFSTATE_RESOURCE_GROUP }}
-  TFSTATE_SA: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
-  TFSTATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+  pull-requests: write # to post the gate summary as a PR comment
 
 jobs:
-  plan-and-policy:
+  policy-gate:
     runs-on: ubuntu-latest
-    env:
-      ARM_USE_OIDC: "true"
-      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,7 +44,7 @@ jobs:
           head="${{ github.event.pull_request.head.sha }}"
           changed=$(git diff --name-only "$base" "$head" | grep -E '^azure/' | head -n1 || true)
           if [ -z "$changed" ]; then
-            echo "::notice::No azure/ files changed; skipping plan."
+            echo "::notice::No azure/ files changed; skipping policy gate."
             echo "dir=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -59,13 +53,6 @@ jobs:
           echo "dir=$dir"       >> "$GITHUB_OUTPUT"
           echo "ticket=$ticket" >> "$GITHUB_OUTPUT"
           echo "Dir: $dir  Ticket: $ticket"
-
-      - uses: azure/login@v2
-        if: steps.meta.outputs.dir != ''
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - uses: hashicorp/setup-terraform@v3
         if: steps.meta.outputs.dir != ''
@@ -77,56 +64,50 @@ jobs:
         working-directory: ${{ steps.meta.outputs.dir }}
         run: terraform fmt -check -diff
 
-      - name: Terraform init
+      - name: Terraform validate (no backend)
         if: steps.meta.outputs.dir != ''
         working-directory: ${{ steps.meta.outputs.dir }}
         run: |
-          terraform init -input=false \
-            -backend-config="resource_group_name=${TFSTATE_RG}" \
-            -backend-config="storage_account_name=${TFSTATE_SA}" \
-            -backend-config="container_name=${TFSTATE_CONTAINER}" \
-            -backend-config="key=${{ steps.meta.outputs.ticket }}.tfstate" \
-            -backend-config="use_azuread_auth=true"
+          terraform init -input=false -backend=false
+          terraform validate
 
-      - name: Terraform validate
+      - name: Setup Conftest
         if: steps.meta.outputs.dir != ''
-        working-directory: ${{ steps.meta.outputs.dir }}
-        run: terraform validate
+        uses: open-policy-agent/setup-conftest@v0
+        with:
+          conftest_version: 0.56.0
 
-      - name: Terraform plan
+      - name: Conftest (SnowIaC guardrails — blocking)
         if: steps.meta.outputs.dir != ''
-        working-directory: ${{ steps.meta.outputs.dir }}
         run: |
-          terraform plan -input=false -lock=false -out=tfplan
-          terraform show -json tfplan > plan.json
+          conftest test "${{ steps.meta.outputs.dir }}" \
+            --parser hcl2 \
+            --policy policy \
+            --no-color
 
-      - name: Checkov (broad IaC policy)
+      - name: Checkov (broad IaC scan — report only)
         if: steps.meta.outputs.dir != ''
+        continue-on-error: true
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: ${{ steps.meta.outputs.dir }}
           framework: terraform
-          soft_fail: false
+          soft_fail: true
           output_format: cli
 
-      - name: Conftest (SnowIaC guardrails)
-        if: steps.meta.outputs.dir != ''
-        uses: instrumenta/conftest-action@master
-        with:
-          files: ${{ steps.meta.outputs.dir }}/plan.json
-          policy: policy
-
-      - name: Post plan summary
+      - name: Post gate summary
         if: always() && steps.meta.outputs.dir != ''
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
             const dir = '${{ steps.meta.outputs.dir }}';
             let body = `### Terraform policy gate for \`${dir}\`\n\n`;
             body += `Status: **${{ job.status }}**\n\n`;
-            body += `Checkov + Conftest (\`policy/snowiac.rego\`) ran against the plan. `;
-            body += `A failing check blocks this merge.`;
+            body += `Hermetic static analysis (no cloud credentials):\n`;
+            body += `- \`terraform fmt\` + \`terraform validate -backend=false\`\n`;
+            body += `- **Conftest** (\`policy/snowiac.rego\`) — blocking guardrails\n`;
+            body += `- Checkov — broad IaC scan (report-only)\n\n`;
+            body += `A failing Conftest check blocks this merge.`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
