@@ -39,9 +39,9 @@ Five Foundry agents collaborate:
 |---|---|
 | **IntakeAgent** | Classify ticket (`azure_infra_change`), validate required fields. |
 | **CodeGenAgent** | LLM-extract structured params (`AzureDiskParams`), render Jinja2 Terraform, open/update GitHub PR, persist verification spec. |
-| **(human reviewer)** | Approves the PR. |
-| **VerificationAgent** | Reads the live Azure resource, evaluates assertions from the persisted spec. |
-| **ClosureAgent** | Posts an evidence comment to ServiceNow and transitions the ticket to *Closed Complete* (or *Failed* on mismatch). |
+| **(human reviewer)** | Approves the PR (merge is gated by a required policy-as-code check). |
+| **VerificationAgent** | **Fails closed**: requires the deploy report `status=applied` *and* a persisted spec, then reads the live Azure resource and evaluates the assertions. Missing spec or `status≠applied` → escalate, never auto-close. |
+| **ClosureAgent** | Posts an evidence comment to ServiceNow and transitions the ticket to *Closed Complete*. **Resilient**: if ServiceNow is unreachable it falls back to email and marks the ticket *Closed Complete (SNOW sync pending)* rather than failing the flow. |
 
 ---
 
@@ -60,7 +60,7 @@ Five Foundry agents collaborate:
 > **Prerequisite checklist** — confirm each line before starting:
 >
 > - [ ] `terraform apply` in [`infra/`](infra/) succeeded (Container App, ACR, Key Vault, UAMI, Foundry role assignment all exist)
-> - [ ] Container App revision is running with `image = snowiacacrehlgt.azurecr.io/snowiac:v1` and `FOUNDRY_MODEL_DEPLOYMENT_NAME = gpt-5.4`
+> - [ ] Container App revision is running with the current image `snowiacacrehlgt.azurecr.io/snowiac:v4` and `FOUNDRY_MODEL_DEPLOYMENT_NAME = gpt-5.4`
 > - [ ] Key Vault holds **all four** secrets: `database-url`, `webhook-hmac-secret`, `snow-password`, `github-token`
 > - [ ] Postgres Flexible Server is reachable and the `snowiac` database exists
 > - [ ] In the IaC repo (e.g. `lindazhang2000/snowiac`) the GHA secrets are set: `SNOWIAC_WEBHOOK_URL`, `SNOWIAC_WEBHOOK_SECRET`, `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
@@ -161,6 +161,7 @@ curl.exe -s "https://$fqdn/api/tickets/<RITMxxxxxxx>" | ConvertFrom-Json | Selec
 | Stuck at `CODEGEN STARTED` | `GITHUB_TOKEN` missing/expired in Key Vault | `az keyvault secret set --vault-name <kv> --name github-token --value <pat>` then restart revision |
 | Stuck at `AWAITING HUMAN MERGE` after merge | GHA `terraform-apply` didn't trigger | Confirm the merged file path matches `azure/**` and the workflow ran |
 | `DEPLOY APPLIED` then no `VERIFIED` | UAMI lacks `Reader` on target RG | Grant it (already encoded in `infra/identity.tf` for the verifier RG) |
+| `terraform init` fails `403 AuthorizationFailure` (ListBlobs) | tfstate storage account `publicNetworkAccess = Disabled` blocks GitHub-hosted runners | Use a self-hosted VNet runner, add the runner egress IP to the storage firewall, or briefly toggle public access for the apply |
 | HMAC 401 in container logs | Secret mismatch between GH repo and Key Vault | `terraform output -raw webhook_hmac_secret` and update the IaC repo secret |
 
 #### Local-only variant (no Azure, no SNOW round-trip)
@@ -319,18 +320,20 @@ sequenceDiagram
 | Layer | Module | Responsibility |
 |---|---|---|
 | **Edge** | `server.py` | HTTP surface — ticket intake, GitHub webhook (HMAC-verified), dashboard, JSON API. |
-| **Orchestration** | `workflow.py` | Two flows (`run_intake_flow`, `run_post_deploy_flow`) wired to the `TicketStore` from `store.py` (Postgres in cloud, SQLite locally) with events for the timeline. |
+| **Orchestration** | `workflow.py` | Two flows (`run_intake_flow`, `run_post_deploy_flow`) wired to the `TicketStore` from `store.py`. Durable in-process state machine (`workflow_state`) with webhook **idempotency** (`processed_runs`); a failed post-deploy run releases its `run_id` so a GitHub retry re-drives. |
 | **Agents** | `agents/intake.py` | Foundry LLM call to classify the ticket, validate required payload fields. |
-|  | `agents/code_generation.py` | LLM-extract structured `AzureDiskParams`, render Jinja2 Terraform, open/update PR via PyGithub, persist spec. |
-|  | `agents/verification.py` | Spec-driven assertion runner that reads the live Azure resource. |
-|  | `agents/closure.py` | Compose evidence comment, PATCH ServiceNow ticket (deterministic, no LLM). |
+|  | `agents/code_generation.py` | LLM-extract structured `AzureDiskParams`, render Jinja2 Terraform (`fmt`-clean, tagged), open/update PR via PyGithub, persist spec. |
+|  | `agents/verification.py` | Fail-closed, spec-driven assertion runner that reads the live Azure resource; escalates (best-effort SNOW, guarded) on mismatch. |
+|  | `agents/closure.py` | Compose evidence comment, PATCH ServiceNow (deterministic). SNOW outage → email fallback + *Closed Complete (SNOW sync pending)*. |
 | **Services** | `services/azure_verifier.py` | `azure-mgmt-compute` wrapper + `verify_spec` op evaluator (`>=`, `<=`, `==`, `!=`, `>`, `<`). |
 |  | `services/parameter_extractor.py` | LLM-structured extraction with regex fallback. |
 |  | `services/terraform_generator.py` | StrictUndefined Jinja2 renderer for templates and tfvars. |
 |  | `services/github_repo.py` | PyGithub branch/file/PR upserts (idempotent reuse). |
 |  | `services/servicenow.py` | ServiceNow REST client (lookup, PATCH, comment) + in-memory mock. |
-| **Persistence** | PostgreSQL (Azure Database for PostgreSQL Flexible Server) | `tickets`, `specs`, `events` tables. Connection string sourced from Key Vault. Falls back to local SQLite (`snowiac.db`) when `DATABASE_URL` is unset. |
-| **CI/CD** | `.github/workflows/terraform-apply.yml` | OIDC login, AAD-auth backend, plan/apply, HMAC callback. |
+|  | `services/notifier.py` | SMTP email sink — closure notification for non-SNOW channels and the ServiceNow-outage fallback. |
+| **Persistence** | PostgreSQL (Azure Database for PostgreSQL Flexible Server) | `tickets`, `specs`, `events`, `workflow_state`, `processed_runs` tables. Connection string sourced from Key Vault. Falls back to local SQLite (`snowiac.db`) when `DATABASE_URL` is unset. |
+| **CI/CD** | `.github/workflows/terraform-plan.yml` | Hermetic policy-as-code PR gate (conftest/OPA + Checkov); enforced as a required status check. |
+|  | `.github/workflows/terraform-apply.yml` | OIDC login, AAD-auth backend, plan/apply, HMAC callback. |
 
 ### Trust & security model
 
@@ -338,7 +341,10 @@ sequenceDiagram
 - **No storage account keys.** Terraform azurerm backend uses `use_azuread_auth=true`; the federated SP has `Storage Blob Data Contributor` on the tfstate account.
 - **Human-in-the-loop gate.** Nothing is applied to Azure until a reviewer merges the PR — Terraform is *generated* by an LLM, but never *executed* by it.
 - **Webhook integrity.** GitHub Actions HMAC-SHA256-signs every callback; the server rejects unsigned/mismatched payloads.
-- **Spec-driven verification.** Approval doesn't equal correctness. The post-deploy verifier reads the live resource and evaluates the spec generated *before* deployment, catching drift between intent and reality.
+- **Spec-driven, fail-closed verification.** Approval doesn't equal correctness. The post-deploy verifier reads the live resource and evaluates the spec generated *before* deployment, catching drift between intent and reality. For cloud changes it **fails closed**: a missing spec or a non-`applied` deploy status escalates instead of auto-closing.
+- **Policy-as-code gate.** A required, hermetic `policy-gate` check (conftest/OPA + Checkov) blocks any PR whose Terraform is missing governance tags, exceeds IOPS/throughput caps, or opens management ports to the internet.
+- **Durable & idempotent.** Workflow state is persisted (`workflow_state`) and webhooks are de-duplicated by `run_id` (`processed_runs`); a failed post-deploy run releases its id so a GitHub retry safely re-drives.
+- **Resilient closure.** A ServiceNow outage never crashes the flow \u2014 closure falls back to email and records *Closed Complete (SNOW sync pending)* for a later manual sync.
 - **Auditability.** Every state transition is appended to the `events` table and surfaced in the dashboard timeline.
 
 ### Key design decisions
@@ -369,6 +375,7 @@ src/snowiac/
   services/
     azure_verifier.py    # azure-mgmt-compute calls + assertion engine
     github_repo.py       # PyGithub wrapper
+    notifier.py          # SMTP email closure sink (non-SNOW channel + fallback)
     parameter_extractor.py
     servicenow.py        # ServiceNow REST client + mock
     terraform_generator.py
@@ -384,7 +391,10 @@ src/snowiac/
 terraform_templates/
   azure_disk_change.tf.j2
   *_backend.tf.j2
+policy/
+  snowiac.rego           # OPA/conftest policy enforced on every PR
 .github/workflows/
+  terraform-plan.yml     # hermetic policy-as-code PR gate (required check)
   terraform-apply.yml    # OIDC auth + AAD-auth backend + HMAC callback
 ```
 
@@ -452,6 +462,19 @@ Required RBAC on the federated SP:
 
 - **Contributor** on the target resource group
 - **Storage Blob Data Contributor** on the tfstate storage account
+
+> **Note — network-locked tfstate.** If the tfstate storage account has `publicNetworkAccess = Disabled`, GitHub-hosted runners cannot reach the backend and `terraform init` fails with `403 AuthorizationFailure`. Either run the apply on a **self-hosted runner inside the VNet**, add the runner's egress IP to the storage firewall, or briefly toggle public access for the apply window.
+
+### Policy-as-code PR gate (required check)
+
+Every pull request runs [`.github/workflows/terraform-plan.yml`](.github/workflows/terraform-plan.yml) (job `policy-gate`). It is **hermetic** — no Azure login, no remote backend — so it passes even when the tfstate account is network-locked:
+
+1. Detect the changed `azure/<ticket>` directory (short-circuits to a pass when a PR touches no `azure/**` files, so the required check always reports).
+2. `terraform fmt -check` + `terraform init -backend=false` + `terraform validate`.
+3. **Conftest** ([`policy/snowiac.rego`](policy/snowiac.rego), OPA) — **blocking**. Denies any `azurerm_*` resource missing the `snow_ticket`/`managed_by` tags, caps `disk_iops_read_write` / `disk_mbps_read_write`, and blocks wide-open inbound NSG rules on ports 22/3389.
+4. **Checkov** — report-only (soft-fail) with a PR comment.
+
+`policy-gate` is enforced as a **required status check** via a repository ruleset, so no PR can merge until it passes. The CodeGenAgent emits Terraform that is already `fmt`-clean and carries the required tags.
 
 ---
 
